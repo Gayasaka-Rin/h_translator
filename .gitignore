@@ -30,3 +30,4 @@ test/
 config.json
 model_preference.json
 .h_translator.lock
+*.bak

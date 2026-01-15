@@ -96,16 +96,28 @@ class UserDictionary:
                 return True
         return False
 
-    def get_context_prompt(self) -> str:
+    def get_context_prompt(self, text: Optional[str] = None) -> str:
         """
         번역 프롬프트에 포함할 사전 컨텍스트 생성
         LLM에게 사전 내용을 전달하여 번역 시 참조하도록 함
+
+        Args:
+            text: 번역할 텍스트 (제공 시 해당 텍스트에 있는 단어만 필터링)
         """
         if not self.entries:
             return ""
 
+        # 텍스트가 제공되면 매칭되는 항목만 필터링
+        if text:
+            matching = [e for e in self.entries if e.source in text]
+            if not matching:
+                return ""
+            entries_to_use = matching
+        else:
+            entries_to_use = self.entries
+
         lines = ["[사용자 사전 - 아래 용어들은 반드시 지정된 번역어를 사용하세요]"]
-        for entry in self.entries:
+        for entry in entries_to_use:
             if entry.condition:
                 lines.append(f"- {entry.source} → {entry.target} (조건: {entry.condition})")
             else:

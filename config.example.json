@@ -31,9 +31,9 @@
     "max_chars": 10000,
     "preserve_html_tags": true
   },
-  "dictionary": {
-    "enabled": true,
-    "path": "dictionaries/ja-ko.md"
+  "prompts": {
+    "dictionary": "prompts/ja-ko.md",
+    "system": "prompts/system.md"
   },
   "ruby": {
     "convert_to_parentheses": true,

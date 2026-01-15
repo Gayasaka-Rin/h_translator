@@ -134,13 +134,23 @@ def init_translator():
     except Exception as e:
         return False, f"번역기 초기화 실패: {e}"
 
+    # 프롬프트/사전 로드
+    prompts_config = config.get("prompts", {})
+
     # 사전 로드
-    dict_config = config.get("dictionary", {})
-    if dict_config.get("enabled", False):
-        dict_path = SCRIPT_DIR / dict_config.get("path", "dictionaries/ja-ko.md")
+    dict_path_str = prompts_config.get("dictionary", "")
+    if dict_path_str:
+        dict_path = SCRIPT_DIR / dict_path_str
         if dict_path.exists():
             dictionary = UserDictionary(str(dict_path))
             translator.set_dictionary(dictionary)
+
+    # 시스템 프롬프트 로드
+    system_path_str = prompts_config.get("system", "")
+    if system_path_str:
+        system_path = SCRIPT_DIR / system_path_str
+        if system_path.exists():
+            translator.load_system_prompt(str(system_path))
 
     return True, "OK"
 

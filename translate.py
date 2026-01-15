@@ -202,16 +202,25 @@ def main():
         input("\n엔터를 눌러 종료...")
         sys.exit(1)
 
+    # 프롬프트/사전 로드
+    prompts_config = config.get("prompts", {})
+
     # 사전 로드
-    dict_config = config.get("dictionary", {})
-    if dict_config.get("enabled", False):
-        dict_path = SCRIPT_DIR / dict_config.get("path", "dictionaries/ja-ko.md")
+    dict_path_str = prompts_config.get("dictionary", "")
+    if dict_path_str:
+        dict_path = SCRIPT_DIR / dict_path_str
         if dict_path.exists():
             dictionary = UserDictionary(str(dict_path))
             translator.set_dictionary(dictionary)
             print(f"[사전] {len(dictionary)}개 항목 로드")
-        else:
-            print(f"(!) 사전 파일 없음: {dict_path}")
+
+    # 시스템 프롬프트 로드
+    system_path_str = prompts_config.get("system", "")
+    if system_path_str:
+        system_path = SCRIPT_DIR / system_path_str
+        if system_path.exists():
+            translator.load_system_prompt(str(system_path))
+            print(f"[프롬프트] {system_path.name}")
 
     # 번역 설정 표시
     trans_config = config.get("translation", {})

@@ -42,6 +42,7 @@ class Translator:
         self.target_lang = self.translation_config.get("target_lang", "ko")
 
         self.dictionary: Optional[UserDictionary] = None
+        self.system_prompt: Optional[str] = None
         self.on_model_switch = on_model_switch
 
         # 프로바이더 목록 구성
@@ -155,6 +156,25 @@ class Translator:
         """사용자 사전 설정"""
         self.dictionary = dictionary
 
+    def set_system_prompt(self, prompt: str):
+        """시스템 프롬프트 설정"""
+        self.system_prompt = prompt
+
+    def load_system_prompt(self, path: str):
+        """시스템 프롬프트 파일 로드"""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                # 주석 라인 제거 (# 으로 시작하는 제목 라인)
+                lines = []
+                for line in content.split('\n'):
+                    if line.startswith('# '):
+                        continue
+                    lines.append(line)
+                self.system_prompt = '\n'.join(lines).strip()
+        except Exception:
+            pass
+
     def _build_prompt(self, text: str, is_filename: bool = False) -> str:
         """번역 프롬프트 생성"""
         source_name = LANGUAGE_NAMES.get(self.source_lang, self.source_lang)
@@ -167,7 +187,11 @@ class Translator:
 
 파일명: {text}"""
         else:
-            prompt = f"""다음 텍스트를 {source_name}에서 {target_name}로 번역해주세요.
+            # 외부 시스템 프롬프트 사용 또는 기본값
+            if self.system_prompt:
+                prompt = self.system_prompt.replace("{source_lang}", source_name).replace("{target_lang}", target_name)
+            else:
+                prompt = f"""다음 텍스트를 {source_name}에서 {target_name}로 번역해주세요.
 
 번역 지침:
 1. 자연스럽고 읽기 쉬운 {target_name}로 번역하세요.
@@ -177,7 +201,7 @@ class Translator:
 5. 번역 결과만 출력하세요. 설명이나 주석은 필요 없습니다.
 """
             if self.dictionary:
-                dict_context = self.dictionary.get_context_prompt()
+                dict_context = self.dictionary.get_context_prompt(text)
                 if dict_context:
                     prompt += f"\n{dict_context}\n"
 
