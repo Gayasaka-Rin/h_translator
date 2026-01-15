@@ -65,6 +65,52 @@ def contains_japanese(text: str) -> bool:
     return bool(japanese_pattern.search(text))
 
 
+def contains_korean(text: str) -> bool:
+    """텍스트에 한국어가 포함되어 있는지 확인"""
+    korean_pattern = re.compile(
+        r'[\uAC00-\uD7AF]|'  # 완성형 한글
+        r'[\u1100-\u11FF]|'  # 한글 자모
+        r'[\u3130-\u318F]'   # 호환용 한글 자모
+    )
+    return bool(korean_pattern.search(text))
+
+
+def detect_source_language(text: str) -> str:
+    """
+    텍스트의 주 언어 감지 (일본어/한국어/영어)
+
+    Returns:
+        'ja': 일본어 (히라가나/가타카나가 있음)
+        'ko': 한국어 (한글이 있음)
+        'en': 영어 (알파벳만 있음)
+        'unknown': 판단 불가
+    """
+    # 한글 고유 문자 카운트 (완성형 + 자모)
+    korean_chars = len(re.findall(r'[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]', text))
+
+    # 일본어 고유 문자 카운트 (히라가나 + 가타카나)
+    # 한자는 양쪽에서 사용하므로 제외
+    japanese_chars = len(re.findall(r'[\u3040-\u309F\u30A0-\u30FF]', text))
+
+    # 영어 알파벳 카운트
+    english_chars = len(re.findall(r'[a-zA-Z]', text))
+
+    # 우선순위: 일본어 > 한국어 > 영어
+    # (일본어/한국어 고유 문자가 있으면 그 언어로 판단)
+    if japanese_chars > korean_chars:
+        return 'ja'
+    elif korean_chars > japanese_chars:
+        return 'ko'
+    elif japanese_chars > 0:
+        return 'ja'  # 히라가나/가타카나가 있으면 일본어
+    elif korean_chars > 0:
+        return 'ko'
+    elif english_chars > 0:
+        return 'en'  # 알파벳만 있으면 영어
+    else:
+        return 'unknown'
+
+
 def convert_ruby_to_parentheses(html_content: str, keep_reading: bool = True) -> str:
     """
     HTML 루비 태그를 괄호 형식으로 변환

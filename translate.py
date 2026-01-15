@@ -37,6 +37,7 @@ from core.file_handler import (
     convert_ruby_to_parentheses,
     split_text_into_chunks,
     is_supported_file,
+    detect_source_language,
 )
 
 
@@ -64,7 +65,21 @@ def translate_file(file_path: str, translator: Translator, config: dict) -> bool
         content = read_file(file_path)
         print(f"  - 파일 크기: {len(content):,} 글자")
 
-        # 3. 루비 태그 처리
+        # 3. 언어 감지 (컨텍스트 메뉴는 외국어→한국어만 지원)
+        sample_text = content[:2000]  # 처음 2000자로 판단
+        detected_lang = detect_source_language(sample_text)
+        lang_names = {"ja": "일본어", "ko": "한국어", "en": "영어", "unknown": "알 수 없음"}
+        print(f"  - 감지된 언어: {lang_names.get(detected_lang, detected_lang)}")
+
+        if detected_lang == "ko":
+            print("  (!) 한국어 파일입니다. 컨텍스트 메뉴 번역은 외국어→한국어만 지원합니다.")
+            print("      한→일 번역은 H Translator 서비스 UI를 사용하세요.")
+            return False
+
+        # 번역 방향 설정 (외국어→한국어 고정)
+        translator.set_translation_direction(detected_lang if detected_lang != "unknown" else "ja", "ko")
+
+        # 4. 루비 태그 처리
         ruby_config = config.get("ruby", {})
         if ruby_config.get("convert_to_parentheses", True):
             content = convert_ruby_to_parentheses(
@@ -222,11 +237,8 @@ def main():
             translator.load_system_prompt(str(system_path))
             print(f"[프롬프트] {system_path.name}")
 
-    # 번역 설정 표시
-    trans_config = config.get("translation", {})
-    source = trans_config.get("source_lang", "ja")
-    target = trans_config.get("target_lang", "ko")
-    print(f"[번역] {source} -> {target}")
+    # 번역 설정 표시 (컨텍스트 메뉴는 자동감지→한국어 고정)
+    print("[번역] 자동 감지 -> 한국어 (컨텍스트 메뉴 모드)")
     print(f"[대상] {len(file_paths)}개 파일")
 
     # 파일 번역 실행

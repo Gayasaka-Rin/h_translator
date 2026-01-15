@@ -11,6 +11,7 @@ from google.genai import types as genai_types
 import anthropic
 
 from .dictionary import UserDictionary
+from .file_handler import detect_source_language
 
 
 # 언어 코드 → 언어 이름 매핑
@@ -38,10 +39,24 @@ class Translator:
         self.api_config = config.get("api", {})
         self.translation_config = config.get("translation", {})
 
-        self.source_lang = self.translation_config.get("source_lang", "ja")
-        self.target_lang = self.translation_config.get("target_lang", "ko")
+        # 번역 모드: "auto" (자동 감지) / "ja-ko" / "ko-ja" (고정)
+        self.translation_mode = self.translation_config.get("mode", "auto")
 
+        # 기본 언어 설정 (호환성: source_lang/target_lang 또는 default_source/default_target)
+        self.default_source = self.translation_config.get(
+            "default_source", self.translation_config.get("source_lang", "ja")
+        )
+        self.default_target = self.translation_config.get(
+            "default_target", self.translation_config.get("target_lang", "ko")
+        )
+
+        # 현재 번역 방향 (동적으로 변경 가능)
+        self.source_lang = self.default_source
+        self.target_lang = self.default_target
+
+        # 사전들 (방향별)
         self.dictionary: Optional[UserDictionary] = None
+        self.dictionaries: dict[str, UserDictionary] = {}
         self.system_prompt: Optional[str] = None
         self.on_model_switch = on_model_switch
 
@@ -153,8 +168,67 @@ class Translator:
         return False
 
     def set_dictionary(self, dictionary: UserDictionary):
-        """사용자 사전 설정"""
+        """사용자 사전 설정 (단일 사전 - 하위 호환용)"""
         self.dictionary = dictionary
+        # 현재 방향에도 등록
+        pair = f"{self.source_lang}-{self.target_lang}"
+        self.dictionaries[pair] = dictionary
+
+    def load_dictionaries(self, dictionaries_config: dict, base_dir: str):
+        """양방향 사전 로드
+
+        Args:
+            dictionaries_config: {"ja-ko": "path/to/ja-ko.md", "ko-ja": "path/to/ko-ja.md"}
+            base_dir: 기준 디렉토리 경로
+        """
+        import os
+        for pair, path in dictionaries_config.items():
+            full_path = os.path.join(base_dir, path)
+            if os.path.exists(full_path):
+                self.dictionaries[pair] = UserDictionary(full_path)
+
+    def get_current_dictionary(self) -> Optional[UserDictionary]:
+        """현재 번역 방향에 맞는 사전 반환"""
+        pair = f"{self.source_lang}-{self.target_lang}"
+        return self.dictionaries.get(pair, self.dictionary)
+
+    def set_translation_direction(self, source: str, target: str):
+        """번역 방향 설정"""
+        self.source_lang = source
+        self.target_lang = target
+
+    def swap_direction(self):
+        """번역 방향 반전 (ja↔ko)"""
+        self.source_lang, self.target_lang = self.target_lang, self.source_lang
+
+    def detect_and_set_direction(self, text: str) -> tuple[str, str]:
+        """텍스트에서 언어 감지 후 번역 방향 자동 설정
+
+        Returns:
+            (source_lang, target_lang) 튜플
+        """
+        if self.translation_mode != "auto":
+            # 고정 모드면 현재 설정 유지
+            return (self.source_lang, self.target_lang)
+
+        detected = detect_source_language(text)
+
+        if detected == 'ja':
+            self.source_lang, self.target_lang = 'ja', 'ko'
+        elif detected == 'ko':
+            self.source_lang, self.target_lang = 'ko', 'ja'
+        # unknown인 경우 기본값 유지
+
+        return (self.source_lang, self.target_lang)
+
+    def get_suffix(self) -> str:
+        """현재 번역 방향에 맞는 파일 suffix 반환"""
+        suffix_map = {
+            'ko': self.translation_config.get("suffix_ko",
+                  self.translation_config.get("suffix", "_ko")),
+            'ja': self.translation_config.get("suffix_ja", "_ja"),
+        }
+        return suffix_map.get(self.target_lang, f"_{self.target_lang}")
 
     def set_system_prompt(self, prompt: str):
         """시스템 프롬프트 설정"""
@@ -200,8 +274,10 @@ class Translator:
 4. 루비 태그 <ruby>본문<rt>읽기</rt></ruby>는 "본문(읽기)" 형식의 괄호 표기로 변환하세요.
 5. 번역 결과만 출력하세요. 설명이나 주석은 필요 없습니다.
 """
-            if self.dictionary:
-                dict_context = self.dictionary.get_context_prompt(text)
+            # 현재 번역 방향에 맞는 사전 사용
+            dictionary = self.get_current_dictionary()
+            if dictionary:
+                dict_context = dictionary.get_context_prompt(text)
                 if dict_context:
                     prompt += f"\n{dict_context}\n"
 
