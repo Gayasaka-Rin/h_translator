@@ -87,9 +87,16 @@ def translate_file(file_path: str, translator: Translator, config: dict) -> bool
             translated = translator.translate_text(chunk)
             chunk_time = time.time() - chunk_start
             translated_chunks.append(translated)
-            print(f"  - 청크 {i+1}/{len(chunks)} 완료 ({chunk_time:.1f}초, {len(chunk)}자)")
+            # 토큰 정보 포함
+            token_info = ""
+            if translator.last_usage:
+                token_info = f", {translator.last_usage['total_tokens']}토큰"
+            print(f"  - 청크 {i+1}/{len(chunks)} 완료 ({chunk_time:.1f}초, {len(chunk)}자{token_info})")
         total_time = time.time() - total_start
         print(f"  - 총 번역 시간: {total_time:.1f}초")
+        # 총 토큰 사용량 출력
+        if translator.total_input_tokens > 0:
+            print(f"  - 총 토큰: {translator.total_input_tokens + translator.total_output_tokens} (입력: {translator.total_input_tokens}, 출력: {translator.total_output_tokens})")
 
         translated_content = "\n\n".join(translated_chunks)
 
@@ -147,21 +154,48 @@ def main():
         input("\n엔터를 눌러 종료...")
         sys.exit(1)
 
-    # API 키 확인
-    api_key = config.get("api", {}).get("api_key", "")
-    if not api_key or api_key == "YOUR_API_KEY_HERE":
+    # API 키 확인 (providers 배열 형식 지원)
+    api_config = config.get("api", {})
+    has_valid_key = False
+    if "providers" in api_config:
+        for p in api_config["providers"]:
+            key = p.get("api_key", "")
+            if key and key not in ("YOUR_API_KEY_HERE", "YOUR_OPENAI_API_KEY", "YOUR_ANTHROPIC_API_KEY"):
+                has_valid_key = True
+                break
+    else:
+        key = api_config.get("api_key", "")
+        has_valid_key = key and key != "YOUR_API_KEY_HERE"
+
+    if not has_valid_key:
         print("(X) config.json에 API 키를 설정해주세요.")
         input("\n엔터를 눌러 종료...")
         sys.exit(1)
 
     # 모델 전환 콜백
-    def on_model_switch(old_model: str, new_model: str):
-        print(f"\n  (!) 할당량 초과: {old_model} -> {new_model} 전환")
+    def on_model_switch(old_model: str, new_model: str, reason: str):
+        print(f"\n  (!) {reason}: {old_model} -> {new_model} 전환")
 
     # 번역기 초기화
     print("[초기화] 번역기 준비 중...")
     try:
         translator = Translator(config, on_model_switch=on_model_switch)
+
+        # 저장된 선호 모델 적용
+        preference_file = SCRIPT_DIR / "model_preference.json"
+        if preference_file.exists():
+            try:
+                with open(preference_file, 'r', encoding='utf-8') as f:
+                    pref = json.load(f)
+                    preferred_model = pref.get("preferred_model", "")
+                    if preferred_model:
+                        for i, p in enumerate(translator.providers):
+                            if f"{p['name']}:{p['model']}" == preferred_model:
+                                translator.current_provider_index = i
+                                break
+            except:
+                pass
+
         print(f"[모델] {translator.current_model}")
     except Exception as e:
         print(f"(X) 번역기 초기화 실패: {e}")

@@ -26,6 +26,70 @@ import pystray
 from core.translator import Translator, load_config
 from core.dictionary import UserDictionary
 
+# 모델 선호 설정 파일
+PREFERENCE_FILE = SCRIPT_DIR / "model_preference.json"
+LOCK_FILE = SCRIPT_DIR / ".h_translator.lock"
+
+
+def check_already_running() -> bool:
+    """이미 실행 중인지 확인"""
+    import psutil
+
+    if not LOCK_FILE.exists():
+        return False
+
+    try:
+        with open(LOCK_FILE, 'r') as f:
+            old_pid = int(f.read().strip())
+
+        # 해당 PID 프로세스가 존재하고 Python인지 확인
+        if psutil.pid_exists(old_pid):
+            proc = psutil.Process(old_pid)
+            if 'python' in proc.name().lower():
+                return True
+    except:
+        pass
+
+    return False
+
+
+def create_lock():
+    """락 파일 생성"""
+    with open(LOCK_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+def remove_lock():
+    """락 파일 제거"""
+    try:
+        LOCK_FILE.unlink()
+    except:
+        pass
+
+
+def save_model_preference(model_name: str):
+    """선호 모델 저장"""
+    import json
+    try:
+        with open(PREFERENCE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({"preferred_model": model_name}, f)
+    except:
+        pass
+
+
+def load_model_preference() -> str:
+    """선호 모델 로드"""
+    import json
+    try:
+        if PREFERENCE_FILE.exists():
+            with open(PREFERENCE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get("preferred_model", "")
+    except:
+        pass
+    return ""
+
+
 # 전역 변수
 translator = None
 config = None
@@ -46,11 +110,23 @@ def init_translator():
     except Exception as e:
         return False, f"설정 파일 로드 실패: {e}"
 
-    api_key = config.get("api", {}).get("api_key", "")
-    if not api_key or api_key == "YOUR_API_KEY_HERE":
+    # API 키 확인 (providers 배열 형식 지원)
+    api_config = config.get("api", {})
+    has_valid_key = False
+    if "providers" in api_config:
+        for p in api_config["providers"]:
+            key = p.get("api_key", "")
+            if key and key not in ("YOUR_API_KEY_HERE", "YOUR_OPENAI_API_KEY", "YOUR_ANTHROPIC_API_KEY"):
+                has_valid_key = True
+                break
+    else:
+        key = api_config.get("api_key", "")
+        has_valid_key = key and key != "YOUR_API_KEY_HERE"
+
+    if not has_valid_key:
         return False, "config.json에 API 키를 설정해주세요"
 
-    def on_model_switch(old_model: str, new_model: str):
+    def on_model_switch(old_model: str, new_model: str, reason: str):
         pass  # GUI 모드에서는 무시
 
     try:
@@ -117,14 +193,49 @@ class ManualTranslationWindow:
         style.configure('Dark.TLabel', background='#2b2b2b', foreground='#ffffff', font=('맑은 고딕', 15))
         style.configure('Title.TLabel', background='#2b2b2b', foreground='#4a9eff', font=('맑은 고딕', 16, 'bold'))
         style.configure('Status.TLabel', background='#2b2b2b', foreground='#888888', font=('맑은 고딕', 13))
+        style.configure('Model.TCombobox', font=('맑은 고딕', 12))
 
         # 메인 프레임
         main_frame = ttk.Frame(self.root, style='Dark.TFrame', padding=15)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
+        # 상단 바 (상태 + 모델 선택)
+        top_frame = ttk.Frame(main_frame, style='Dark.TFrame')
+        top_frame.pack(fill=tk.X)
+
         # 상태 표시
-        self.status_label = ttk.Label(main_frame, text="텍스트를 입력하고 번역 버튼을 누르세요", style='Status.TLabel')
-        self.status_label.pack(anchor='w')
+        self.status_label = ttk.Label(top_frame, text="텍스트를 입력하고 번역 버튼을 누르세요", style='Status.TLabel')
+        self.status_label.pack(side=tk.LEFT)
+
+        # 파일번역 모델 선택 (오른쪽)
+        model_frame = ttk.Frame(top_frame, style='Dark.TFrame')
+        model_frame.pack(side=tk.RIGHT)
+
+        ttk.Label(model_frame, text="번역 모델:", style='Status.TLabel').pack(side=tk.LEFT, padx=(0, 5))
+
+        self.model_var = tk.StringVar()
+        self.model_list = self._get_model_list()
+        self.model_combo = ttk.Combobox(model_frame, textvariable=self.model_var,
+                                         values=self.model_list, state='readonly',
+                                         width=30, font=('맑은 고딕', 11))
+        self.model_combo.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 저장된 선호 모델 로드
+        preferred = load_model_preference()
+        default_idx = 0
+        if preferred and preferred in self.model_list:
+            default_idx = self.model_list.index(preferred)
+        if self.model_list:
+            self.model_combo.current(default_idx)
+            # translator에도 적용
+            if translator and default_idx < len(translator.providers):
+                translator.current_provider_index = default_idx
+
+        # 확인 버튼
+        self.model_btn = tk.Button(model_frame, text="설정", command=self._on_model_confirm,
+                                   bg='#4a9eff', fg='#ffffff', font=('맑은 고딕', 10),
+                                   relief='flat', padx=10, cursor='hand2')
+        self.model_btn.pack(side=tk.LEFT)
 
         # 좌우 컨테이너
         content_frame = ttk.Frame(main_frame, style='Dark.TFrame')
@@ -181,6 +292,36 @@ class ManualTranslationWindow:
         # 포커스
         self.original_text.focus_set()
 
+    def _get_model_list(self) -> list:
+        """사용 가능한 모델 목록 가져오기"""
+        global translator
+        if translator is None:
+            return []
+        return [f"{p['name']}:{p['model']}" for p in translator.providers]
+
+    def _on_model_change(self, event=None):
+        """모델 변경 시 호출 (수동 번역에 즉시 적용)"""
+        global translator
+        if translator is None:
+            return
+
+        selected_idx = self.model_combo.current()
+        if selected_idx >= 0 and selected_idx < len(translator.providers):
+            translator.current_provider_index = selected_idx
+
+    def _on_model_confirm(self):
+        """파일 번역용 모델 설정 저장"""
+        global translator
+        if translator is None:
+            return
+
+        selected_idx = self.model_combo.current()
+        if selected_idx >= 0 and selected_idx < len(translator.providers):
+            translator.current_provider_index = selected_idx
+            model_name = translator.current_model
+            save_model_preference(model_name)
+            self.status_label.config(text=f"번역 모델 설정됨: {model_name}")
+
     def do_translate(self):
         """번역 실행"""
         global translator
@@ -209,12 +350,18 @@ class ManualTranslationWindow:
         self.translated_text.insert('1.0', translated)
         self.translated_text.config(state='disabled')
 
+        # 모델/토큰 정보
+        model_info = translator.current_model
+        token_info = ""
+        if translator.last_usage:
+            token_info = f", {translator.last_usage['total_tokens']}토큰"
+
         # 클립보드 복사
         try:
             pyperclip.copy(translated)
-            self.status_label.config(text="[완료] 클립보드에 복사됨")
+            self.status_label.config(text=f"[완료] {model_info}{token_info} - 클립보드에 복사됨")
         except:
-            self.status_label.config(text="[완료]")
+            self.status_label.config(text=f"[완료] {model_info}{token_info}")
 
         # 로그 저장
         try:
@@ -239,7 +386,7 @@ class ManualTranslationWindow:
 class TranslationPopup:
     """번역 결과 팝업 창"""
 
-    def __init__(self, original: str, translated: str, status: str = "완료"):
+    def __init__(self, original: str, translated: str, status: str = "완료", model: str = "", tokens: int = 0):
         self.root = tk.Tk()
         self.root.title("H Translator")
         self.root.configure(bg='#2b2b2b')
@@ -271,7 +418,13 @@ class TranslationPopup:
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # 상태 표시
-        status_label = ttk.Label(main_frame, text=f"[{status}] 클립보드에 복사됨", style='Status.TLabel')
+        status_text = f"[{status}]"
+        if model:
+            status_text += f" {model}"
+        if tokens > 0:
+            status_text += f", {tokens}토큰"
+        status_text += " - 클립보드에 복사됨"
+        status_label = ttk.Label(main_frame, text=status_text, style='Status.TLabel')
         status_label.pack(anchor='w')
 
         # 좌우 컨테이너
@@ -418,8 +571,12 @@ def do_translate():
         except:
             pass
 
+        # 모델/토큰 정보
+        model_info = translator.current_model if translator else ""
+        token_count = translator.last_usage.get('total_tokens', 0) if translator and translator.last_usage else 0
+
         # 결과 팝업
-        popup = TranslationPopup(text, translated)
+        popup = TranslationPopup(text, translated, model=model_info, tokens=token_count)
         popup.show()
     finally:
         is_translating = False
@@ -440,6 +597,7 @@ def open_manual_window():
 
 def on_quit(icon, item):
     """종료"""
+    remove_lock()
     icon.stop()
     keyboard.unhook_all()
     os._exit(0)
@@ -469,6 +627,15 @@ def create_tray_icon():
 
 def main():
     """메인 함수"""
+    # 중복 실행 확인
+    if check_already_running():
+        # 이미 실행 중이면 번역 창만 열기 요청 (간단히 새 창 열기)
+        show_error_popup("H Translator가 이미 실행 중입니다.\n트레이 아이콘을 확인하세요.")
+        sys.exit(0)
+
+    # 락 파일 생성
+    create_lock()
+
     # 번역기 초기화
     success, message = init_translator()
     if not success:
@@ -476,10 +643,21 @@ def main():
         sys.exit(1)
 
     # 핫키 등록 (Ctrl+Alt+Z)
-    keyboard.add_hotkey('ctrl+alt+z', on_hotkey, suppress=True)
+    # suppress=False: 원격 데스크톱 키 입력 충돌 방지
+    keyboard.add_hotkey('ctrl+alt+z', on_hotkey, suppress=False)
 
-    # 시스템 트레이 실행
+    # 시스템 트레이 생성
     icon = create_tray_icon()
+
+    # 시작 시 번역 창 열기 (별도 스레드)
+    def open_initial_window():
+        time.sleep(0.3)  # 트레이 초기화 대기
+        window = ManualTranslationWindow()
+        window.show()
+
+    threading.Thread(target=open_initial_window, daemon=True).start()
+
+    # 시스템 트레이 실행 (메인 스레드)
     icon.run()
 
 
